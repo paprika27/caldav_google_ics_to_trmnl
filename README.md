@@ -31,7 +31,7 @@ Larapaper doesn’t natively support calendar plugins like the official `oem-cal
    ```
 
 ## TRMNL Integration
-Use this stack in conjunction with the [Upcoming ICS Template](https://github.com/paprika27/trmnlp_upcoming_ics) to render the timeline on your device.
+Use this stack in conjunction with the [Upcoming ICS Recipe](https://github.com/paprika27/trmnlp_upcoming_ics) to render the timeline on your device.
 
 ## License
 MIT
