@@ -1,0 +1,58 @@
+services:
+  # --- DavMail: The Gateway ---
+  # Bridges Microsoft Exchange (EWS) to standard CalDAV protocols
+  davmail:
+    image: kran0/davmail-docker:latest
+    restart: unless-stopped
+    ports:
+      - 1080:1080 # Exposes the CalDAV/HTTP proxy port to the host which might not be necessary if you are only going to use ical-proxy to talk to it directly / using internal ports.
+    volumes:
+      # Persistent config storage (useful if you need to manually tweak davmail.properties)
+      - /home/pi/home-network-stack/davmail:/davmail-config 
+    environment:
+      DAVMAIL_MODE: EWS                   # Exchange Web Services mode (standard for O365/modern Exchange)
+      DAVMAIL_CALDAVPASTDELAY: 10         # Keeps events in sync for 10 days into the past
+      DAVMAIL_URL: https://ews.DOMAIN.de/ews/exchange.asmx # Your company's Exchange endpoint
+      DAVMAIL_CALDAVPORT: 1080            # Internal port DavMail listens on for CalDAV requests
+      DAVMAIL_SERVER: true                # Runs in server mode (no GUI/Tray icon)
+      DAVMAIL_CHUNKED_MESSAGES: false     # Disables chunked encoding (helps with some older clients/parsers)
+      JAVA_OPTS: -Xmx128m                 # Sets JVM heap max to 128MB to prevent RAM spikes
+    deploy:
+      resources:
+        limits:
+          memory: 128M                    # Hard container limit (important for Raspberry Pi stability)
+    networks:
+      - trmnl-bridge
+
+  # --- iCal Proxy: The Aggregator ---
+  # Custom Python Flask app that merges DavMail and Google calendars into TRMNL-friendly JSON
+  ical-proxy:
+    image: python:3.11-slim               # Ultra-lightweight Python base
+    container_name: ical-proxy
+    restart: unless-stopped
+    ports:
+      - 1090:80                           # Access the final JSON output at http://[IP]:1090 which might not be necessary if you are only going to use larapaper to talk to it directly / using internal ports.
+    volumes:
+      # Maps your script directly so you can edit logic without rebuilding the image
+      - /home/pi/home-network-stack/ical-proxy/process.py:/app/process.py
+    working_dir: /app
+    environment:
+      # Internal Docker networking: Uses 'davmail' hostname instead of IP
+      - DAVMAIL_URL=http://davmail:1080/users/EMAIL@DOMAIN.de/calendar/ # notice that this 1080 is the internal / right port in the definition above. This should not rely on the port being opened on the host.
+      - DAVMAIL_AUTH=USERNAME@DOMAIN.de:PASSWORD
+      - GOOGLE_URL=https://calendar.google.com/calendar/ical/....%40gmail.com/private-..../basic.ics
+      - CACHE_TIMEOUT=3600                # Cache results for 1 hour to reduce hits on external APIs
+    command: >
+      sh -c "pip install flask requests icalendar recurring-ical-events Flask-Caching && python process.py"
+      # Note: Installing pip packages on startup is great for dev, 
+      # but for 'production' you might eventually want a custom Dockerfile 
+      # to speed up container restarts.
+    networks:
+      - trmnl-bridge
+
+# --- Shared Network ---
+# Assumes 'trmnl-bridge' was created manually via 'docker network create trmnl-bridge'
+# This allows these containers to talk to Larapaper if it's on the same network.
+networks:
+  trmnl-bridge:
+    external: true
