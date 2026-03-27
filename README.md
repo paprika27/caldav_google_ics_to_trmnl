@@ -3,7 +3,7 @@
 This repository provides a full Docker-based stack to bridge enterprise calendars (Outlook/Exchange via DavMail) and Google Calendars to your TRMNL device ([KOreader plugin](https://github.com/usetrmnl/trmnl-koreader) on Kobo Clara Colour, in my case) using [BYOS Larapaper](https://github.com/usetrmnl/larapaper).
 
 Larapaper doesn’t natively support calendar plugins like the official `oem-calendar` plugin (written in Ruby). The existing plugins rely on this core dependency, making it impossible to import calendars directly. There is now a seed holidays ics recipe but this is no solution because
-- **Exchange (EWS)**: Even translated into CalDav by `davmail` needs login credentials.
+- **Exchange (EWS)**: Needs login credentials even translated into CalDav by `davmail`.
 - **Google Calendar**: Private `.ics` files are unfiltered and crash Larapaper’s frontend if not preprocessed.
 
 **Solution**: Built a proxy service (`ical-proxy`) that:
