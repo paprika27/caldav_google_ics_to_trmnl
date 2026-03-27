@@ -1,0 +1,48 @@
+services:
+  # --- Larapaper: The TRMNL Server ---
+  # This service hosts your private plugins, manages the database, 
+  # and renders the Liquid templates into images for your device.
+  app:
+    image: ghcr.io/usetrmnl/larapaper:latest
+    restart: unless-stopped
+    ports:
+      - "4567:8080" # Access the web UI at http://[IP]:4567
+    environment:
+      # --- Security & Core ---
+      # Crucial: Encrypts cookies and session data. 
+      - APP_KEY=base64:D.... 
+      
+      # Disables new user sign-ups once your account is created. This is necessary to permit auto-join of new devices.
+      - REGISTRATION_ENABLED=0 
+
+      # --- Performance (Pi Optimized) ---
+      # Speeds up PHP execution by caching script bytecode in shared memory.
+      - PHP_OPCACHE_ENABLE=1 
+      
+      - TRMNL_PROXY_REFRESH_MINUTES=15 
+
+      # --- Rendering ---
+      # Uses the newer logic for scaling the virtual browser window 
+      # that captures your CSS/Liquid layout. I needed this for a Kobo Clara Colour with custom device model.
+      - PUPPETEER_WINDOW_SIZE_STRATEGY=v2 
+
+      # --- Database ---
+      # Points to the SQLite file inside the container's persistent volume.
+      - DB_DATABASE=database/storage/database.sqlite 
+      
+    volumes:
+      # Persists your plugin configurations, logs, and SQLite database file.
+      - /home/pi/home-network-stack/larapaper/database:/var/www/html/database/storage
+      
+      # Stores the rendered images (.png) that are sent to your TRMNL screen.
+      - /home/pi/home-network-stack/larapaper/storage:/var/www/html/storage/app/public/images/generated
+      
+    networks:
+      - trmnl-bridge
+
+# --- Shared Network ---
+# Connecting to the same bridge allows Larapaper to 'see' your ical-proxy 
+# using the hostname 'http://ical-proxy:80' internally.
+networks:
+  trmnl-bridge:
+    external: true
