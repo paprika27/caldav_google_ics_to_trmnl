@@ -42,7 +42,7 @@ services:
       # Internal Docker networking: Uses 'davmail' hostname instead of IP
       - DAVMAIL_URL=http://davmail:1080/users/EMAIL@DOMAIN.de/calendar/ # notice that this 1080 is the internal / right port in the definition above. This should not rely on the port being opened on the host.
       - DAVMAIL_AUTH=USERNAME@DOMAIN.de:PASSWORD
-      - GOOGLE_URL=https://calendar.google.com/calendar/ical/....%40gmail.com/private-..../basic.ics
+      - GOOGLE_URL=https://calendar.google.com/calendar/ical/....%40gmail.com/private-..../basic.ics # Find this in your calendar settings on calendar.google.com
       - CACHE_TIMEOUT=3600                # Cache results for 1 hour to reduce hits on external APIs
     command: >
       sh -c "pip install flask requests icalendar recurring-ical-events Flask-Caching && python process.py"
