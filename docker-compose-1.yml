@@ -37,6 +37,8 @@ services:
       - /home/pi/home-network-stack/ical-proxy/process.py:/app/process.py
     working_dir: /app
     environment:
+      # override Docker defaulting to UTC regardless of host datetime
+      - TZ=Europe/Berlin
       # Internal Docker networking: Uses 'davmail' hostname instead of IP
       - DAVMAIL_URL=http://davmail:1080/users/EMAIL@DOMAIN.de/calendar/ # notice that this 1080 is the internal / right port in the definition above. This should not rely on the port being opened on the host.
       - DAVMAIL_AUTH=USERNAME@DOMAIN.de:PASSWORD
