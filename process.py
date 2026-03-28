@@ -65,8 +65,8 @@ def process_events(event_list, source_name):
         })
     return processed
 
-@app.route('/events.json')
-def all_events():
+@cache.memoize(timeout=timeout_env)
+def get_data_from_sources():
     """
     The main endpoint called by Larapaper/TRMNL.
     Supports a ?refresh=true query parameter to force a cache clear.
@@ -75,24 +75,40 @@ def all_events():
         cache.clear()
 
     # Fetch and expand both calendars
-    charite_raw = get_filtered_ics(DAVMAIL_URL, AUTH)
+    davmail_raw = get_filtered_ics(DAVMAIL_URL, AUTH)
     google_raw = get_filtered_ics(GOOGLE_URL)
 
     # 1. Process both lists into our standard format
     # 2. Combine them into one large list
     # 3. Sort them chronologically by start time
     combined = sorted(
-        process_events(charite_raw, "charite") + process_events(google_raw, "google"),
+        process_events(davmail_raw, "davmail") + process_events(google_raw, "google"),
         key=lambda x: x['start']
     )
-
+    
+    # Capture the 'generation' time
+    sync_time = datetime.now().strftime("%H:%M")
+    
     # Return the final JSON structure expected by our Liquid template
-    return jsonify({
-        "last_updated": datetime.now().strftime("%H:%M"),
-        "count": len(combined),
+    return {
+        "sync_time": sync_time,
         "events": combined
-    })
+    }
+        
+@app.route('/events.json')
+def all_events():
+    if request.args.get('refresh') == 'true':
+        cache.clear()
 
+    # This call will either hit the cache or trigger the fetch above
+    cached_data = get_data_from_sources()
+
+    return jsonify({
+        "last_updated": cached_data["sync_time"], # Reflects ACTUAL fetch time, not downstream poll time
+        "count": len(cached_data["events"]),
+        "events": cached_data["events"]
+    })
+    
 if __name__ == '__main__':
     # Runs on port 80 inside the container (mapped to 1090 on the Pi host)
     app.run(host='0.0.0.0', port=80)
