@@ -1,114 +1,141 @@
 import os
-import requests
+import logging
+from datetime import datetime, timedelta, timezone, date
 from flask import Flask, jsonify, request
 from flask_caching import Cache
-from datetime import datetime, timedelta
+import requests
 import icalendar
 import recurring_ical_events
 
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+log = logging.getLogger(__name__)
+
 app = Flask(__name__)
 
-# --- Cache Configuration ---
-# Uses the CACHE_TIMEOUT from docker-compose (defaulting to 300s/5m if not set)
-# SimpleCache is sufficient for a single-user Raspberry Pi setup.
-timeout_env = int(os.environ.get('CACHE_TIMEOUT', 300))
-cache = Cache(config={'CACHE_TYPE': 'SimpleCache', 'CACHE_DEFAULT_TIMEOUT': timeout_env})
+# ---------------------------------------------------------------------------
+# Config
+# ---------------------------------------------------------------------------
+CACHE_TIMEOUT = int(os.environ.get("CACHE_TIMEOUT", 300))
+cache = Cache(config={"CACHE_TYPE": "SimpleCache", "CACHE_DEFAULT_TIMEOUT": CACHE_TIMEOUT})
 cache.init_app(app)
 
-# --- Environment Variables ---
-# Strip potential quotes from URLs and split the AUTH string into a (user, pass) tuple
-DAVMAIL_URL = os.environ.get('DAVMAIL_URL')
-GOOGLE_URL = os.environ.get('GOOGLE_URL')
-AUTH_RAW = os.environ.get('DAVMAIL_AUTH', "user:pass").split(":")
-AUTH = (AUTH_RAW[0], AUTH_RAW[1])
+DAVMAIL_URL = os.environ.get("DAVMAIL_URL", "").strip("'\"")
+GOOGLE_URL  = os.environ.get("GOOGLE_URL",  "").strip("'\"")
 
-@cache.memoize(timeout=timeout_env)
-def get_filtered_ics(url, auth=None):
-    """
-    Fetches the iCal feed, parses it, and expands recurring events.
-    Memoized so we don't spam Google/DavMail on every page refresh.
-    """
-    # Clean up the URL in case environment variables were passed with extra quotes
-    clean_url = url.strip('"').strip("'")
-    
-    # Fetch the raw ICS file with a 30s timeout to prevent hanging the app
-    resp = requests.get(clean_url, auth=auth, timeout=30)
-    resp.raise_for_status() # Crashes gracefully if 401 Unauthorized or 404
-    
-    # Load the ICS into the icalendar object
-    cal = icalendar.Calendar.from_ical(resp.content)
-    
-    # Filter Window: Start Now, look ahead 7 days.
-    # recurring_ical_events is CRITICAL here: it turns "Every Friday" into 
-    # actual individual event instances for the given range.
-    start = datetime.now()
-    end = start + timedelta(days=7)
+# Split on first colon only — passwords may contain colons
+_auth_raw = os.environ.get("DAVMAIL_AUTH", "user:pass").split(":", 1)
+DAVMAIL_AUTH = tuple(_auth_raw) if len(_auth_raw) == 2 else None
+
+LOOKAHEAD_DAYS = int(os.environ.get("LOOKAHEAD_DAYS", 7))
+
+# ---------------------------------------------------------------------------
+# Sources: list of (url, auth_or_None, source_label)
+# Add more entries here when you wire in new calendars — no other code changes needed.
+# ---------------------------------------------------------------------------
+SOURCES = [
+    (DAVMAIL_URL, DAVMAIL_AUTH, "charite"),
+    (GOOGLE_URL,  None,         "google"),
+]
+
+# ---------------------------------------------------------------------------
+# ICS fetching & parsing
+# ---------------------------------------------------------------------------
+def fetch_ics(url: str, auth=None) -> icalendar.Calendar:
+    """Fetch a raw ICS URL and return a parsed Calendar object."""
+    resp = requests.get(url, auth=auth, timeout=30)
+    resp.raise_for_status()
+    return icalendar.Calendar.from_ical(resp.content)
+
+
+def expand_events(cal: icalendar.Calendar, start: datetime, end: datetime) -> list:
+    """Expand recurring events within [start, end)."""
     return recurring_ical_events.of(cal).between(start, end)
 
-def process_events(event_list, source_name):
-    """
-    Transforms raw iCal event objects into clean dictionaries for JSON output.
-    """
-    processed = []
-    for event in event_list:
-        # Extract the datetime objects for start and end
-        start_dt = event.get('dtstart').dt
-        end_dt = event.get('dtend').dt
-        
-        processed.append({
-            "summary": str(event.get('summary')),
-            # Check if dt is a datetime (with time) or just a date (all-day event)
-            # then convert to ISO 8601 string for the Liquid template
-            "start": start_dt.isoformat() if hasattr(start_dt, 'isoformat') else str(start_dt),
-            "end": end_dt.isoformat() if hasattr(end_dt, 'isoformat') else str(end_dt),
-            "source": source_name # Added so Liquid can color-code by source
-        })
-    return processed
 
-@cache.memoize(timeout=timeout_env)
-def get_data_from_sources():
+def serialize_event(event, source: str) -> dict:
     """
-    The main endpoint called by Larapaper/TRMNL.
-    Supports a ?refresh=true query parameter to force a cache clear.
+    Convert a raw iCal VEVENT into a plain dict for JSON output.
+    All-day events (date objects) get ISO date strings; timed events get ISO datetimes.
     """
-    if request.args.get('refresh') == 'true':
-        cache.clear()
+    raw_start = event.get("dtstart").dt
+    raw_end   = event.get("dtend").dt
 
-    # Fetch and expand both calendars
-    davmail_raw = get_filtered_ics(DAVMAIL_URL, AUTH)
-    google_raw = get_filtered_ics(GOOGLE_URL)
+    # isinstance check correctly distinguishes date from datetime
+    # (datetime is a subclass of date, so check datetime first)
+    def to_iso(val):
+        if isinstance(val, datetime):
+            # Normalise to UTC so Liquid template gets consistent strings
+            if val.tzinfo is not None:
+                val = val.astimezone(timezone.utc)
+            return val.isoformat()
+        if isinstance(val, date):
+            return val.isoformat()          # "2026-03-29" — all-day
+        return str(val)
 
-    # 1. Process both lists into our standard format
-    # 2. Combine them into one large list
-    # 3. Sort them chronologically by start time
-    combined = sorted(
-        process_events(davmail_raw, "davmail") + process_events(google_raw, "google"),
-        key=lambda x: x['start']
-    )
-    
-    # Capture the 'generation' time
-    sync_time = datetime.now().strftime("%H:%M")
-    
-    # Return the final JSON structure expected by our Liquid template
     return {
-        "sync_time": sync_time,
-        "events": combined
+        "summary":  str(event.get("summary", "Untitled")),
+        "start":    to_iso(raw_start),
+        "end":      to_iso(raw_end),
+        "location": str(event.get("location", "")),
+        "source":   source,
+        "all_day":  isinstance(raw_start, date) and not isinstance(raw_start, datetime),
     }
-        
-@app.route('/events.json')
-def all_events():
-    if request.args.get('refresh') == 'true':
-        cache.clear()
 
-    # This call will either hit the cache or trigger the fetch above
-    cached_data = get_data_from_sources()
 
-    return jsonify({
-        "last_updated": cached_data["sync_time"], # Reflects ACTUAL fetch time, not downstream poll time
-        "count": len(cached_data["events"]),
-        "events": cached_data["events"]
-    })
-    
-if __name__ == '__main__':
-    # Runs on port 80 inside the container (mapped to 1090 on the Pi host)
-    app.run(host='0.0.0.0', port=80)
+def fetch_source(url: str, auth, label: str) -> list[dict]:
+    """Fetch, expand, and serialize one calendar source. Returns [] on any error."""
+    if not url:
+        log.warning("Source %r has no URL configured — skipping.", label)
+        return []
+    try:
+        now = datetime.now(timezone.utc)
+        cal = fetch_ics(url, auth)
+        raw = expand_events(cal, now, now + timedelta(days=LOOKAHEAD_DAYS))
+        events = [serialize_event(e, label) for e in raw]
+        log.info("Source %r: fetched %d events.", label, len(events))
+        return events
+    except requests.HTTPError as e:
+        log.error("HTTP error fetching %r: %s", label, e)
+    except Exception as e:
+        log.error("Unexpected error fetching %r: %s", label, e)
+    return []
+
+
+def build_payload() -> dict:
+    """Fetch all sources, merge, sort, and return the final payload dict."""
+    all_events = []
+    for url, auth, label in SOURCES:
+        all_events.extend(fetch_source(url, auth, label))
+
+    all_events.sort(key=lambda e: e["start"])
+
+    return {
+        "last_updated": datetime.now().strftime("%H:%M"),
+        "count":        len(all_events),
+        "events":       all_events,
+    }
+
+# ---------------------------------------------------------------------------
+# Route
+# ---------------------------------------------------------------------------
+@app.route("/events.json")
+def all_events_route():
+    force = request.args.get("refresh") == "true"
+
+    if force:
+        cache.delete("calendar_payload")
+        log.info("Cache cleared by ?refresh=true")
+
+    payload = cache.get("calendar_payload")
+    if payload is None:
+        payload = build_payload()
+        cache.set("calendar_payload", payload, timeout=CACHE_TIMEOUT)
+        status = "fresh"
+    else:
+        status = "cached"
+
+    return jsonify({**payload, "cache_status": status})
+
+
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=80)
