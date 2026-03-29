@@ -20,7 +20,7 @@ Larapaper doesn’t natively support calendar plugins like the official `oem-cal
 ## Setup
 1. **Clone the repo**:
    ```bash
-   git clone [https://github.com/paprika27/caldav_google_ics_to_trmnl](https://github.com/paprika27/caldav_google_ics_to_trmnl)
+   git clone https://github.com/paprika27/caldav_google_ics_to_trmnl
    cd caldav_google_ics_to_trmnl
    ```
 2. **Configure Environment**:
