@@ -33,7 +33,7 @@ LOOKAHEAD_DAYS = int(os.environ.get("LOOKAHEAD_DAYS", 7))
 # Add more entries here when you wire in new calendars — no other code changes needed.
 # ---------------------------------------------------------------------------
 SOURCES = [
-    (DAVMAIL_URL, DAVMAIL_AUTH, "charite"),
+    (DAVMAIL_URL, DAVMAIL_AUTH, "davmail"),
     (GOOGLE_URL,  None,         "google"),
 ]
 
