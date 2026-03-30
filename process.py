@@ -121,16 +121,35 @@ def build_payload() -> dict:
 @app.route("/events.json")
 def all_events_route():
     force = request.args.get("refresh") == "true"
-
-    if force:
-        cache.delete("calendar_payload")
-        log.info("Cache cleared by ?refresh=true")
-
+    now_ts = datetime.now(timezone.utc).timestamp()
+    
+    # 1. Pull the data
     payload = cache.get("calendar_payload")
-    if payload is None:
-        payload = build_payload()
-        cache.set("calendar_payload", payload, timeout=CACHE_TIMEOUT)
-        status = "fresh"
+    
+    # 2. Determine if it's ACTUALLY expired
+    is_expired = False
+    if payload:
+        last_sync = payload.get("sync_timestamp", 0)
+        # If the data is older than our CACHE_TIMEOUT, it's stale
+        if (now_ts - last_sync) > CACHE_TIMEOUT:
+            is_expired = True
+            log.info("Cache internal age (%ds) exceeds timeout. Forcing refresh.", now_ts - last_sync)
+
+    # 3. Trigger build if: missing, forced, or manually determined as expired
+    if payload is None or force or is_expired:
+        log.info("Executing fresh build_payload...")
+        try:
+            payload = build_payload()
+            # Inject a real Unix timestamp so we can't be fooled by stale memory
+            payload["sync_timestamp"] = now_ts 
+            
+            # We still set a long timeout here as a safety net, 
+            # but our 'is_expired' logic above is the primary gatekeeper.
+            cache.set("calendar_payload", payload, timeout=CACHE_TIMEOUT * 2)
+            status = "fresh"
+        except Exception as e:
+            log.error("Build failed: %s", e)
+            return jsonify({"error": "Fetch failed", "details": str(e)}), 500
     else:
         status = "cached"
 
