@@ -8,6 +8,8 @@ services:
     ports:
       - "4567:8080" # Access the web UI at http://[IP]:4567
     environment:
+      # Make sure sleep time matches actual time
+      - TZ=Europe/Berlin
       # --- Security & Core ---
       # Crucial: Encrypts cookies and session data. 
       - APP_KEY=base64:D.... 
